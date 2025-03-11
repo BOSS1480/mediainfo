@@ -11,4 +11,4 @@ COPY . .
 
 EXPOSE 8080
 
-CMD ["python", "flask_server.py"]
+CMD ["python", "bot.py"]
