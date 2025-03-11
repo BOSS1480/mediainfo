@@ -8,9 +8,9 @@ from aiofiles.os import remove as aioremove, path as aiopath, mkdir
 import asyncio
 
 # הגדרת טוקן, API ID ו-API HASH
-API_ID = 22558238
-API_HASH = "41abc14dd9f760887a50f9cd2cc1bb73"
-TOKEN = "7945465531:AAHj2u1j6ItJE6dEkrTTo_sKJ0j926HEQCE"
+API_ID = ""
+API_HASH = ""
+TOKEN = ""
 
 AUTHORIZED_USER_ID = 6335855540  # המנהל המורשה
 
