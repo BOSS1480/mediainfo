@@ -177,4 +177,4 @@ async def start(client, message):
     await message.reply(start_text, reply_to_message_id=message.id)
 
 if __name__ == "__main__":
-    bot.run()
+    app.run(host='0.0.0.0', port=8080)
