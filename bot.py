@@ -57,6 +57,47 @@ MSG_HELP_THUMB = (
     "👀 צפייה בתמונה: `/view_thumb`"
 )
 
+section_dict = {"General": "🗒", "Video": "🎞", "Audio": "🔊", "Text": "🔠", "Menu": "🗃"}
+
+def parseinfo(out, size):
+    tc = ""
+    trigger = False
+    
+    size_line = f"File size : {size / (1024 * 1024):.2f} MiB"
+    if size > 1024 * 1024 * 1024:
+        size_line = f"File size : {size / (1024 * 1024 * 1024):.2f} GiB"
+
+    lines = out.split("\n")
+    
+    for line in lines:
+        line = line.strip()
+        if not line: continue
+
+        found_section = False
+        for section, emoji in section_dict.items():
+            if line.startswith(section) and ":" not in line:
+                trigger = True
+                if not line.startswith("General"):
+                    tc += "</pre><br>"
+                tc += f"<h4>{emoji} {line.replace('Text', 'Subtitle')}</h4>"
+                found_section = True
+                break
+        
+        if found_section:
+            continue
+
+        if line.startswith("File size"):
+            line = size_line
+        
+        if trigger:
+            tc += "<br><pre>"
+            trigger = False
+        
+        tc += line + "\n"
+    
+    tc += "</pre><br>"
+    return tc
+
 @app.on_message(filters.command("start"))
 async def start_command(client, message):
     keyboard = InlineKeyboardMarkup([
@@ -134,16 +175,21 @@ async def video_handler(client, message):
     if os.path.exists(thumb_path):
         msg = await message.reply("⚡ **מעבד תמונה...**", quote=True)
         try:
+            file_ref = message.video.file_id if message.video else message.document.file_id
+            
             await client.send_video(
                 chat_id=message.chat.id,
-                video=message.video.file_id if message.video else message.document.file_id,
+                video=file_ref,
                 thumb=thumb_path,
-                caption=message.caption or "",
+                caption=message.caption,
+                caption_entities=message.caption_entities,
                 supports_streaming=True
             )
             await msg.delete()
         except Exception as e:
             await msg.edit(f"❌ שגיאה: {e}")
+    else:
+        pass
 
 @app.on_message(filters.command("mediainfo"))
 async def mediainfo_command_handler(client, message):
@@ -186,16 +232,24 @@ async def process_mediainfo(client, message):
         output = stdout.decode().strip()
         
         if output:
-            formatted_out = output.replace("\n", "<br>")
-            link = await create_telegraph_page("MediaInfo Result", f"<pre>{formatted_out}</pre>")
+            file_size = getattr(file_obj, "file_size", 0)
+            file_name = getattr(file_obj, "file_name", "Unknown File")
+            parsed_content = parseinfo(output, file_size)
+            
+            if len(parsed_content) < 50:
+                 parsed_content = f"<pre>{output}</pre>"
+
+            final_html = f"<h4>📌 File: {file_name}</h4><br>{parsed_content}"
+            link = await create_telegraph_page("MediaInfo Result", final_html)
+            
             await status.edit(
                 f"✅ **MediaInfo מוכן!**\n"
-                f"📂 קובץ: `{getattr(file_obj, 'file_name', 'Unknown')}`\n"
+                f"📂 קובץ: `{file_name}`\n"
                 f"🔗 [לחץ כאן לצפייה בנתונים]({link})",
                 disable_web_page_preview=False
             )
         else:
-            await status.edit("❌ שגיאה בקריאת המידע.")
+            await status.edit("❌ לא הצלחתי לקרוא מידע (Mediainfo החזיר פלט ריק).")
 
     except Exception as e:
         await status.edit(f"❌ שגיאה: {e}")
