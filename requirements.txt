@@ -4,3 +4,4 @@ python-dotenv
 telegraph
 aiofiles
 dnspython
+httpx
