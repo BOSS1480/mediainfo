@@ -19,7 +19,7 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
 logging.basicConfig(level=logging.INFO)
 
-# התקנה אוטומטית של MediaInfo אם חסר
+# התקנה אוטומטית של MediaInfo
 if shutil.which("mediainfo") is None:
     try:
         subprocess.run("apt-get update && apt-get install -y mediainfo", shell=True, check=False)
@@ -43,18 +43,19 @@ section_dict = {"General": "🗒", "Video": "🎞", "Audio": "🔊", "Text": "�
 # --- פונקציות עזר ---
 
 def resize_thumbnail(path):
-    """התאמת התמונה לדרישות של טלגרם (320px, JPEG)"""
+    """כיווץ תמונה לפורמט שטלגרם מחייב (JPEG, מקסימום 320px)"""
     try:
         img = Image.open(path)
         img.thumbnail((320, 320))
         img = img.convert("RGB")
-        img.save(path, "JPEG", quality=85)
+        img.save(path, "JPEG", quality=80, optimize=True)
         return True
-    except:
+    except Exception as e:
+        logging.error(f"שגיאה בכיווץ תמונה: {e}")
         return False
 
 def parseinfo(out, size):
-    """עיצוב פלט MediaInfo עם אימוג'ים"""
+    """עיצוב פלט MediaInfo"""
     tc = ""
     trigger = False
     size_mb = size / (1024 * 1024)
@@ -84,7 +85,7 @@ def parseinfo(out, size):
     tc += "</pre><br>"
     return tc
 
-# --- תפריטים ---
+# --- תפריטים ופקודות ---
 
 @app.on_message(filters.command("start"))
 async def start_command(client, message):
@@ -93,9 +94,9 @@ async def start_command(client, message):
     ])
     text = (
         "👋 **שלום! אני בוט לניהול מדיה.**\n\n"
-        "אני יכול לעזור לך להוסיף תמונות ממוזערות לוידאו במהירות "
-        "ולהוציא מידע טכני על קבצים.\n\n"
-        "השתמש בכפתור למטה כדי לראות איך אני עובד 👇"
+        "אני יכול להחליף תמונות ממוזערות לוידאו ללא הורדה, "
+        "ולהפיק דוחות MediaInfo מפורטים.\n\n"
+        "השתמש בתפריט למטה למידע נוסף 👇"
     )
     await message.reply_text(text, reply_markup=keyboard, quote=True)
 
@@ -107,23 +108,40 @@ async def callback_handler(client, callback: CallbackQuery):
              InlineKeyboardButton("תמונה ממוזערת 🖼", callback_data="h_th")],
             [InlineKeyboardButton("חזרה 🔙", callback_data="back_start")]
         ])
-        await callback.message.edit_text("📚 **תפריט עזרה**\nבחר נושא ללמידה:", reply_markup=keyboard)
+        await callback.message.edit_text("📚 **תפריט עזרה**\nבחר נושא:", reply_markup=keyboard)
     
     elif callback.data == "h_mi":
         keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("חזרה 🔙", callback_data="help_main")]])
-        text = "📝 **מדיה אינפו**\n\nשלח קובץ והגב עליו עם הפקודה `/mediainfo`.\nהבוט ינתח את הקובץ וישלח לך קישור לדף עם כל הפרטים."
+        text = "📝 **עזרה: מדיה אינפו**\n\nהגב על קובץ עם הפקודה `/mediainfo` או שלח קובץ עם הכיתוב הזה."
         await callback.message.edit_text(text, reply_markup=keyboard)
         
     elif callback.data == "h_th":
         keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("חזרה 🔙", callback_data="help_main")]])
-        text = "🖼 **תמונה ממוזערת**\n\n1. שלח לי תמונה רגילה - היא תישמר כקבועה.\n2. שלח לי וידאו - הוא יוחזר אליך מיד עם התמונה שלך."
+        text = "🖼 **עזרה: תמונה ממוזערת**\n\n1. שלח תמונה - היא תישמר.\n2. שלח וידאו - הוא יוחזר עם התמונה.\n\nפקודות:\n/view_thumb - צפייה בתמונה השמורה\n/del_thumb - מחיקה"
         await callback.message.edit_text(text, reply_markup=keyboard)
 
     elif callback.data == "back_start":
         keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("עזרה ותפריטים 📚", callback_data="help_main")]])
-        await callback.message.edit_text("👋 **בוט ניהול מדיה**\nבחר אפשרות:", reply_markup=keyboard)
+        await callback.message.edit_text("👋 **בוט ניהול מדיה**", reply_markup=keyboard)
 
-# --- לוגיקה של הבוט ---
+# --- פקודות ניהול תמונה ---
+
+@app.on_message(filters.command("view_thumb") & filters.private)
+async def view_thumb(client, message):
+    path = os.path.join(THUMB_DIR, f"{message.from_user.id}.jpg")
+    if os.path.exists(path):
+        await message.reply_photo(path, caption="🖼 זו התמונה השמורה שלך.")
+    else:
+        await message.reply_text("❌ לא הוגדרה תמונה ממוזערת.")
+
+@app.on_message(filters.command("del_thumb") & filters.private)
+async def del_thumb(client, message):
+    path = os.path.join(THUMB_DIR, f"{message.from_user.id}.jpg")
+    if os.path.exists(path):
+        os.remove(path)
+        await message.reply_text("🗑 התמונה נמחקה בהצלחה.")
+    else:
+        await message.reply_text("❌ אין תמונה למחוק.")
 
 @app.on_message(filters.photo & filters.private)
 async def save_thumbnail(client, message):
@@ -131,22 +149,28 @@ async def save_thumbnail(client, message):
     path = os.path.join(THUMB_DIR, f"{user_id}.jpg")
     await message.download(file_name=path)
     if resize_thumbnail(path):
-        await message.reply_text("✅ **התמונה נשמרה בהצלחה!**", quote=True)
+        await message.reply_text("✅ **התמונה נשמרה ומעכשיו תשמש כ-Thumbnail!**", quote=True)
     else:
         await message.reply_text("❌ שגיאה בעיבוד התמונה.", quote=True)
 
+# --- טיפול במדיה ---
+
 @app.on_message(filters.video | filters.document)
 async def video_handler(client, message):
+    # בדיקת מדיה אינפו בקאפשן
     if message.caption and message.caption.startswith("/mediainfo"):
         await process_mediainfo(client, message)
         return
 
+    # החלפת תמונה אם קיימת
     user_id = message.from_user.id
     thumb_path = os.path.join(THUMB_DIR, f"{user_id}.jpg")
+    
     if os.path.exists(thumb_path):
-        msg = await message.reply("⚡ **מעבד...**", quote=True)
+        msg = await message.reply("⚡ **מחליף תמונה...**", quote=True)
         try:
             file_id = message.video.file_id if message.video else message.document.file_id
+            # שליחה עם supports_streaming ו-thumb מפורש
             await client.send_video(
                 chat_id=message.chat.id,
                 video=file_id,
@@ -171,6 +195,10 @@ async def process_mediainfo(client, message):
     file_path = f"mi_{message.id}.dat"
     try:
         file_obj = message.video or message.document or message.audio
+        if not file_obj:
+            return await status.edit("❌ לא נמצא קובץ לניתוח.")
+
+        # הורדת ה-Header
         async with aiofiles.open(file_path, "wb") as f:
             async for chunk in client.stream_media(file_obj):
                 await f.write(chunk)
@@ -187,10 +215,10 @@ async def process_mediainfo(client, message):
             content = parseinfo(output, file_obj.file_size)
             telegraph = Telegraph()
             await telegraph.create_account(short_name="MediaBot")
-            page = await telegraph.create_page(title="MediaInfo Result", html_content=content)
+            page = await telegraph.create_page(title="MediaInfo Results", html_content=content)
             await status.edit(f"✅ **הניתוח הושלם!**\n\n🔗 [לחץ כאן לצפייה בפרטים]({page['url']})")
         else:
-            await status.edit("❌ לא התקבל מידע מהקובץ.")
+            await status.edit("❌ Mediainfo לא הצליח לקרוא את הקובץ.")
     except Exception as e:
         await status.edit(f"❌ שגיאה: {e}")
     finally:
