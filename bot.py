@@ -99,12 +99,9 @@ def parseinfo(out, size):
 @app.on_message(filters.command("start"))
 async def start_command(client, message):
     text = (
-        f"👋 **שלום {message.from_user.mention}!**\n\n"
-        "אני בוט שיודע להוציא מידע טכני (MediaInfo) מתוך קבצי וידאו ואודיו.\n\n"
-        "📥 **איך משתמשים?**\n"
-        "• **בפרטי:** פשוט שלח לי את הקובץ.\n"
-        "• **בקבוצה:** תגיב עם הפקודה `/mediainfo` על הקובץ.\n\n"
-        "🤖 **תהנה!**"
+        f"**היי {message.from_user.mention} 👋**\n\n"
+        "אני בוט mediainfo.\n\n"
+        "• **שלח לי קובץ ואני אתן לך מידע עליו.**"
     )
     await message.reply_text(text, quote=True)
 
