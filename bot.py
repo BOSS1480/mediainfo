@@ -7,6 +7,15 @@ import subprocess
 import logging
 from pyrogram import Client, filters, enums
 from telegraph.aio import Telegraph
+from dotenv import load_dotenv
+
+load_dotenv()
+
+API_ID = int(os.environ.get("API_ID"))
+API_HASH = os.environ.get("API_HASH")
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+
+logging.basicConfig(level=logging.INFO)
 
 if shutil.which("mediainfo") is None:
     print("⚠️ Mediainfo לא נמצא! מנסה להתקין אוטומטית...")
@@ -15,16 +24,22 @@ if shutil.which("mediainfo") is None:
         print("✅ Mediainfo הותקן בהצלחה!")
     except Exception as e:
         print(f"❌ שגיאה בהתקנה אוטומטית: {e}")
-        print("ייתכן שצריך להריץ ידנית: sudo apt install -y mediainfo")
-# -----------------------------------
+        print("חובה להתקין ידנית: sudo apt-get install mediainfo")
+
+app = Client(
+    "MediaInfoBot",
+    api_id=API_ID,
+    api_hash=API_HASH,
+    bot_token=BOT_TOKEN
+)
 
 CHUNK_LIMIT = 20 * 1024 * 1024 
 
 section_dict = {"General": "🗒", "Video": "🎞", "Audio": "🔊", "Text": "🔠", "Menu": "🗃"}
 
-async def create_telegraph_page(title, content, client):
+async def create_telegraph_page(title, content):
     telegraph = Telegraph()
-    me = await client.get_me()
+    me = await app.get_me()
     author_name = me.first_name
     author_url = f"https://t.me/{me.username}"
 
@@ -50,13 +65,9 @@ def parseinfo(out, size):
     if size > 1024 * 1024 * 1024:
         size_line = f"File size : {size / (1024 * 1024 * 1024):.2f} GiB"
 
-    has_video = "Video" in out
-    has_audio = "Audio" in out
+    lines = out.split("\n")
     
-    if not (has_video or has_audio):
-        return None
-
-    for line in out.split("\n"):
+    for line in lines:
         line = line.strip()
         if not line: continue
 
@@ -85,32 +96,47 @@ def parseinfo(out, size):
     tc += "</pre><br>"
     return tc
 
-async def filter_smart(_, __, message):
-    if message.chat.type == enums.ChatType.PRIVATE:
-        return bool(message.video or message.document or message.audio)
-    return False
+@app.on_message(filters.command("start"))
+async def start_command(client, message):
+    text = (
+        f"👋 **שלום {message.from_user.mention}!**\n\n"
+        "אני בוט שיודע להוציא מידע טכני (MediaInfo) מתוך קבצי וידאו ואודיו.\n\n"
+        "📥 **איך משתמשים?**\n"
+        "• **בפרטי:** פשוט שלח לי את הקובץ.\n"
+        "• **בקבוצה:** תגיב עם הפקודה `/mediainfo` על הקובץ.\n\n"
+        "🤖 **תהנה!**"
+    )
+    await message.reply_text(text, quote=True)
 
-smart_filter = filters.create(filter_smart)
-
-@Client.on_message((filters.private & smart_filter) | filters.command("mediainfo"))
+@app.on_message(filters.command("mediainfo") | (filters.private & (filters.document | filters.video | filters.audio)))
 async def mediainfo_handler(client, message):
+    target_msg = None
+    
     if message.chat.type != enums.ChatType.PRIVATE:
+        if not message.text or not message.text.startswith("/mediainfo"):
+            return 
         if not message.reply_to_message:
-            return await message.reply("❌ הגב על קובץ כדי לקבל מידע.", quote=True)
-        media_msg = message.reply_to_message
+            return await message.reply_text("❌ בקבוצות יש להגיב עם `/mediainfo` על הקובץ.", quote=True)
+        target_msg = message.reply_to_message
     else:
-        media_msg = message.reply_to_message if message.reply_to_message else message
+        if message.text and message.text.startswith("/mediainfo"):
+             if message.reply_to_message:
+                 target_msg = message.reply_to_message
+             else:
+                 return await message.reply_text("❌ הגב על קובץ.", quote=True)
+        else:
+            target_msg = message
 
-    file_obj = media_msg.video or media_msg.document or media_msg.audio
+    file_obj = target_msg.video or target_msg.document or target_msg.audio
     
     if not file_obj:
         if message.chat.type == enums.ChatType.PRIVATE:
-            return await message.reply("❌ שלח לי קובץ וידאו, אודיו או מסמך.", quote=True)
+            return await message.reply("❌ לא זוהה קובץ מדיה תקין.", quote=True)
         return
 
-    status = await message.reply("⏳ **קורא נתונים (מוריד 20MB ראשונים)...**", quote=True)
+    status = await message.reply("⏳ **מוריד נתונים (20MB ראשונים)...**", quote=True)
     
-    file_path = f"mi_{media_msg.id}_{secrets.token_hex(2)}.dat"
+    file_path = f"mi_{target_msg.id}_{secrets.token_hex(2)}.dat"
     
     try:
         current_size = 0
@@ -121,7 +147,7 @@ async def mediainfo_handler(client, message):
                 if current_size >= CHUNK_LIMIT:
                     break
 
-        await status.edit("⚙️ **מנתח Metadata...**")
+        await status.edit("⚙️ **מנתח מידע...**")
 
         proc = await asyncio.create_subprocess_shell(
             f'mediainfo "{file_path}"',
@@ -132,18 +158,19 @@ async def mediainfo_handler(client, message):
         output = stdout.decode().strip()
 
         if not output:
-            return await status.edit("❌ **שגיאה:** לא התקבל פלט מ-MediaInfo.")
+            return await status.edit("❌ **שגיאה:** לא התקבל מידע. ייתכן שהקובץ פגום או לא נתמך.")
 
         file_name = getattr(file_obj, "file_name", "Unknown File")
         parsed_content = parseinfo(output, file_obj.file_size)
         
-        if parsed_content is None:
-            return await status.edit("❌ **לא נמצאו נתונים עבור קובץ זה.**")
+        if not parsed_content or len(parsed_content) < 50:
+             return await status.edit("❌ **לא נמצאו נתוני Metadata.**\n(ייתכן שהמידע נמצא בסוף הקובץ ולא בהתחלה)")
 
         final_html = f"<h4>📌 File: {file_name}</h4><br><br>{parsed_content}"
         
         await status.edit("📤 **יוצר דף...**")
-        link = await create_telegraph_page("MediaInfo Result", final_html, client)
+        
+        link = await create_telegraph_page("MediaInfo Result", final_html)
         
         await status.edit(
             f"✅ **MediaInfo נוצר בהצלחה!**\n\n📂 **קובץ:** `{file_name}`\n🔗 **קישור:** [לחץ כאן לצפייה]({link})",
@@ -151,10 +178,12 @@ async def mediainfo_handler(client, message):
         )
 
     except Exception as e:
-        await status.edit(f"❌ שגיאה: `{e}`")
+        await status.edit(f"❌ שגיאה בלתי צפויה: `{e}`")
         
     finally:
         if os.path.exists(file_path):
             os.remove(file_path)
 
-
+if __name__ == "__main__":
+    print("🤖 הבוט מתחיל לרוץ...")
+    app.run()
