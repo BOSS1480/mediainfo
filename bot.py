@@ -18,7 +18,7 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
 logging.basicConfig(level=logging.INFO)
 
-# התקנה אוטומטית של MediaInfo
+# התקנה אוטומטית של MediaInfo אם חסר
 if shutil.which("mediainfo") is None:
     try:
         subprocess.run("apt-get update && apt-get install -y mediainfo", shell=True, check=False)
@@ -38,32 +38,24 @@ if not os.path.exists(THUMB_DIR):
 
 CHUNK_LIMIT = 20 * 1024 * 1024
 
-# --- פונקציות לעיבוד תמונה (איכות גבוהה) ---
+# --- פונקציות עיבוד תמונה (איכות מקסימלית) ---
 
-def get_image_dimensions(path):
-    """מחלץ מימדים לשימוש ב-send_video"""
-    try:
-        with Image.open(path) as img:
-            return img.width, img.height
-    except:
-        return 640, 640
-
-def prepare_thumb(path):
-    """מכין תמונה באיכות מקסימלית לפי התקן של טלגרם"""
+def process_hq_thumb(path):
+    """עיבוד תמונה לאיכות גבוהה לפי התקן של טלגרם"""
     try:
         img = Image.open(path)
-        # טלגרם תומך עד 640x640 ב-High Res Thumbs
-        img.thumbnail((640, 640))
+        # שימוש ב-640px (המקסימום שטלגרם מציג בחדות)
+        img.thumbnail((640, 640), Image.LANCZOS)
         img = img.convert("RGB")
-        # שמירה באיכות 95 (כמעט ללא איבוד) עם הגדרות מקצועיות
-        img.save(path, "JPEG", quality=95, optimize=False, subsampling=0)
+        # שמירה באיכות 100 ללא כיווץ אגרסיבי
+        img.save(path, "JPEG", quality=100, optimize=True)
         return True
     except Exception as e:
-        logging.error(f"Error: {e}")
+        logging.error(f"שגיאה בעיבוד תמונה: {e}")
         return False
 
-def parse_media_info(out, size):
-    """עיצוב דוח המדיה אינפו"""
+def parse_mi_output(out, size):
+    """עיצוב פלט MediaInfo"""
     sections = {"General": "🗒", "Video": "🎞", "Audio": "🔊", "Text": "🔠"}
     tc = ""
     trigger = False
@@ -84,15 +76,17 @@ def parse_media_info(out, size):
         tc += line + "\n"
     return tc + "</pre>"
 
-# --- פקודות ---
+# --- פקודות ותפריטים ---
 
 @app.on_message(filters.command("start"))
 async def start(client, message):
-    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("עזרה ותפריטים 📚", callback_data="help")]])
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("עזרה 📚", callback_data="help")]
+    ])
     await message.reply_text(
-        "👋 **ברוך הבא לבוט החלפת תמונה ומידע!**\n\n"
-        "שלח תמונה כדי לשמור אותה כ-Thumbnail קבוע.\n"
-        "שלח וידאו כדי להחליף לו את התמונה באופן מיידי.",
+        "👋 **בוט ניהול מדיה מהיר**\n\n"
+        "שלח תמונה לשמירה, ואז שלח וידאו להחלפה מיידית.\n"
+        "הגב על קובץ עם `/mediainfo` למידע טכני.",
         reply_markup=keyboard, quote=True
     )
 
@@ -104,11 +98,11 @@ async def cb_handler(client, cb: CallbackQuery):
              InlineKeyboardButton("תמונה ממוזערת 🖼", callback_data="h_th")],
             [InlineKeyboardButton("חזרה 🔙", callback_data="start")]
         ])
-        await cb.message.edit_text("📚 **תפריט עזרה**", reply_markup=keyboard)
+        await cb.message.edit_text("📚 **תפריט עזרה ופקודות**", reply_markup=keyboard)
     elif cb.data == "h_mi":
-        await cb.answer("הגב על קובץ עם /mediainfo", show_alert=True)
+        await cb.answer("הגב על וידאו/קובץ עם הפקודה /mediainfo", show_alert=True)
     elif cb.data == "h_th":
-        await cb.answer("שלח תמונה לשמירה, ואז וידאו להחלפה", show_alert=True)
+        await cb.answer("שלח תמונה לשמירה. לאחר מכן שלח וידאו והתמונה תוחלף אוטומטית.", show_alert=True)
     elif cb.data == "start":
         await start(client, cb.message)
 
@@ -118,7 +112,7 @@ async def view_thumb(client, message):
     if os.path.exists(path):
         await message.reply_photo(path, caption="🖼 זו התמונה השמורה שלך (HQ).")
     else:
-        await message.reply_text("❌ אין תמונה שמורה.")
+        await message.reply_text("❌ לא הוגדרה תמונה.")
 
 @app.on_message(filters.command("del_thumb"))
 async def del_thumb(client, message):
@@ -134,34 +128,47 @@ async def save_photo(client, message):
     user_id = message.from_user.id
     path = os.path.join(THUMB_DIR, f"{user_id}.jpg")
     await message.download(file_name=path)
-    if prepare_thumb(path):
+    if process_hq_thumb(path):
         await message.reply_text("✅ **התמונה נשמרה באיכות גבוהה!**", quote=True)
+
+# --- הנדלר ראשי למדיה ---
 
 @app.on_message(filters.video | filters.document)
 async def media_handler(client, message):
-    # MediaInfo
+    # בדיקת MediaInfo
     if message.caption and message.caption.startswith("/mediainfo"):
         await run_mi(client, message)
         return
 
-    # Thumbnail Change
+    # החלפת Thumbnail
     user_id = message.from_user.id
     thumb_path = os.path.join(THUMB_DIR, f"{user_id}.jpg")
     
     if os.path.exists(thumb_path):
-        msg = await message.reply("⚡ **מבצע החלפה מהירה...**", quote=True)
+        # בדיקה אם זה וידאו או מסמך שנשלח כקובץ
+        media = message.video or message.document
+        if not media: return
+
+        msg = await message.reply("⚡ **מחליף תמונה (מצב מהיר)...**", quote=True)
         try:
-            file_id = message.video.file_id if message.video else message.document.file_id
-            width, height = get_image_dimensions(thumb_path)
+            # חילוץ מטא-דאטה מהודעה המקורית (קריטי להחלפת תמונה ב-file_id)
+            duration = getattr(media, "duration", 0)
+            width = getattr(media, "width", 0)
+            height = getattr(media, "height", 0)
             
-            # שליחת הוידאו עם פרמטרים שמכריחים את טלגרם להציג את התמונה החדשה
+            # אם אלו מסמכים (Document), טלגרם לא תמיד נותן width/height
+            # במקרה כזה נשתמש במימדים של התמונה עצמה
+            if not width or not height:
+                with Image.open(thumb_path) as img:
+                    width, height = img.width, img.height
+
             await client.send_video(
                 chat_id=message.chat.id,
-                video=file_id,
+                video=media.file_id,
                 thumb=thumb_path,
+                duration=duration,
                 width=width,
                 height=height,
-                duration=getattr(message.video, "duration", 0), # חשוב לסנכרון
                 caption=message.caption,
                 caption_entities=message.caption_entities,
                 supports_streaming=True
@@ -175,7 +182,7 @@ async def mi_cmd(client, message):
     if message.reply_to_message:
         await run_mi(client, message.reply_to_message)
     else:
-        await message.reply("❌ הגב על קובץ.")
+        await message.reply("❌ הגב על קובץ עם הפקודה.")
 
 async def run_mi(client, message):
     status = await message.reply("⏳ **מנתח...**", quote=True)
