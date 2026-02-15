@@ -1,180 +1,160 @@
-import logging
 import os
-import re
-from pyrogram import Client, filters
-from aiohttp import ClientSession
-from aiofiles import open as aiopen
-from aiofiles.os import remove as aioremove, path as aiopath, mkdir
 import asyncio
+import secrets
+import aiofiles
+import shutil
+import subprocess
+import logging
+from pyrogram import Client, filters, enums
+from telegraph.aio import Telegraph
 
-# הגדרת טוקן, API ID ו-API HASH
-API_ID = "22558238"
-API_HASH = "41abc14dd9f760887a50f9cd2cc1bb73"
-TOKEN = "7780733128:AAGP0O4qvzfZ-QA0EgPbaO681Qdj4VLpoNc"
-
-AUTHORIZED_USER_ID = 6335855540  # המנהל המורשה
-
-# יצירת Client עם API ID ו-API HASH
-bot = Client("mediainfo_bot", bot_token=TOKEN, api_id=API_ID, api_hash=API_HASH)
-
-# Callback להתקדמות הורדה עבור קבצים קטנים (עד 50MB)
-def progress_callback(current, total, temp_send):
-    percent = int(current * 100 / total)
-    if percent - progress_callback.last_update >= 10 or percent == 100:
-        progress_callback.last_update = percent
-        asyncio.create_task(temp_send.edit(f"<i>הורדה... {percent}%</i>"))
-progress_callback.last_update = 0
-
-# פונקציה שתבצע MediaInfo, תוריד את הקובץ ותכתוב את התוצאה לקובץ .txt
-async def gen_mediainfo(message, link=None, media=None, mmsg=None):
-    temp_send = await message.reply("<i>מתחיל עיבוד MediaInfo...</i>", reply_to_message_id=message.id)
+if shutil.which("mediainfo") is None:
+    print("⚠️ Mediainfo לא נמצא! מנסה להתקין אוטומטית...")
     try:
-        download_path = "Mediainfo/"
-        if not await aiopath.isdir(download_path):
-            await mkdir(download_path)
+        subprocess.run("apt-get update && apt-get install -y mediainfo", shell=True, check=True)
+        print("✅ Mediainfo הותקן בהצלחה!")
+    except Exception as e:
+        print(f"❌ שגיאה בהתקנה אוטומטית: {e}")
+        print("ייתכן שצריך להריץ ידנית: sudo apt install -y mediainfo")
+# -----------------------------------
 
-        if link:
-            # הורדת קובץ מקישור עם עדכון התקדמות
-            filename_match = re.search(r".+/(.+)", link)
-            if not filename_match:
-                raise Exception("לא ניתן לחלץ שם קובץ מהקישור.")
-            filename = filename_match.group(1)
-            des_path = os.path.join(download_path, filename)
-            headers = {"user-agent": "Mozilla/5.0"}
-            async with ClientSession() as session:
-                async with session.get(link, headers=headers) as response:
-                    total = response.content_length
-                    downloaded = 0
-                    last_percent = 0
-                    async with aiopen(des_path, "wb") as f:
-                        async for chunk in response.content.iter_chunked(5000000):  # 5MB בכל פעם
-                            await f.write(chunk)
-                            if total:
-                                downloaded += len(chunk)
-                                percent = int(downloaded * 100 / total)
-                                if percent - last_percent >= 10 or percent == 100:
-                                    last_percent = percent
-                                    await temp_send.edit(f"<i>הורדה... {percent}%</i>")
-        elif media:
-            des_path = os.path.join(download_path, media.file_name)
-            if media.file_size <= 50000000:  # עד 50MB - שימוש בהורדה עם callback
-                progress_callback.last_update = 0
-                await mmsg.download(des_path, progress=progress_callback, progress_args=(temp_send,))
-            else:
-                # הורדה סטרימינג עבור קבצים גדולים, עם עדכון אחוזים
-                downloaded = 0
-                last_percent = 0
-                async with aiopen(des_path, "wb") as f:
-                    async for chunk in bot.stream_media(media, limit=5):
-                        await f.write(chunk)
-                        downloaded += len(chunk)
-                        if media.file_size:
-                            percent = int(downloaded * 100 / media.file_size)
-                            if percent - last_percent >= 10 or percent == 100:
-                                last_percent = percent
-                                await temp_send.edit(f"<i>הורדה... {percent}%</i>")
-        else:
-            raise Exception("לא סופק קישור או מדיה להורדה.")
+CHUNK_LIMIT = 20 * 1024 * 1024 
 
-        # הפעלת MediaInfo על הקובץ שהורד
-        stdout = os.popen(f'mediainfo "{des_path}"').read()
-        result_text = f"📌 {os.path.basename(des_path)}\n\n"
-        if stdout:
-            result_text += stdout
-        else:
-            result_text += "לא נמצאו נתונים מ־MediaInfo."
+section_dict = {"General": "🗒", "Video": "🎞", "Audio": "🔊", "Text": "🔠", "Menu": "🗃"}
 
-        # כתיבת התוצאה לקובץ .txt עם שם ייחודי
-        txt_filename = f"Mediainfo_{message.id}.txt"
-        txt_filepath = os.path.join(download_path, txt_filename)
-        async with aiopen(txt_filepath, "w", encoding="utf-8") as txt_file:
-            await txt_file.write(result_text)
+async def create_telegraph_page(title, content, client):
+    telegraph = Telegraph()
+    me = await client.get_me()
+    author_name = me.first_name
+    author_url = f"https://t.me/{me.username}"
+
+    await telegraph.create_account(
+        short_name=secrets.token_hex(4),
+        author_name=author_name,
+        author_url=author_url
+    )
+    
+    response = await telegraph.create_page(
+        title=title,
+        html_content=content,
+        author_name=author_name,
+        author_url=author_url
+    )
+    return response['url']
+
+def parseinfo(out, size):
+    tc = ""
+    trigger = False
+    
+    size_line = f"File size : {size / (1024 * 1024):.2f} MiB"
+    if size > 1024 * 1024 * 1024:
+        size_line = f"File size : {size / (1024 * 1024 * 1024):.2f} GiB"
+
+    has_video = "Video" in out
+    has_audio = "Audio" in out
+    
+    if not (has_video or has_audio):
+        return None
+
+    for line in out.split("\n"):
+        line = line.strip()
+        if not line: continue
+
+        found_section = False
+        for section, emoji in section_dict.items():
+            if line.startswith(section) and ":" not in line:
+                trigger = True
+                if not line.startswith("General"):
+                    tc += "</pre><br>"
+                tc += f"<h4>{emoji} {line.replace('Text', 'Subtitle')}</h4>"
+                found_section = True
+                break
+        
+        if found_section:
+            continue
+
+        if line.startswith("File size"):
+            line = size_line
+        
+        if trigger:
+            tc += "<br><pre>"
+            trigger = False
+        
+        tc += line + "\n"
+    
+    tc += "</pre><br>"
+    return tc
+
+async def filter_smart(_, __, message):
+    if message.chat.type == enums.ChatType.PRIVATE:
+        return bool(message.video or message.document or message.audio)
+    return False
+
+smart_filter = filters.create(filter_smart)
+
+@Client.on_message((filters.private & smart_filter) | filters.command("mediainfo"))
+async def mediainfo_handler(client, message):
+    if message.chat.type != enums.ChatType.PRIVATE:
+        if not message.reply_to_message:
+            return await message.reply("❌ הגב על קובץ כדי לקבל מידע.", quote=True)
+        media_msg = message.reply_to_message
+    else:
+        media_msg = message.reply_to_message if message.reply_to_message else message
+
+    file_obj = media_msg.video or media_msg.document or media_msg.audio
+    
+    if not file_obj:
+        if message.chat.type == enums.ChatType.PRIVATE:
+            return await message.reply("❌ שלח לי קובץ וידאו, אודיו או מסמך.", quote=True)
+        return
+
+    status = await message.reply("⏳ **קורא נתונים (מוריד 20MB ראשונים)...**", quote=True)
+    
+    file_path = f"mi_{media_msg.id}_{secrets.token_hex(2)}.dat"
+    
+    try:
+        current_size = 0
+        async with aiofiles.open(file_path, "wb") as f:
+            async for chunk in client.stream_media(file_obj):
+                await f.write(chunk)
+                current_size += len(chunk)
+                if current_size >= CHUNK_LIMIT:
+                    break
+
+        await status.edit("⚙️ **מנתח Metadata...**")
+
+        proc = await asyncio.create_subprocess_shell(
+            f'mediainfo "{file_path}"',
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await proc.communicate()
+        output = stdout.decode().strip()
+
+        if not output:
+            return await status.edit("❌ **שגיאה:** לא התקבל פלט מ-MediaInfo.")
+
+        file_name = getattr(file_obj, "file_name", "Unknown File")
+        parsed_content = parseinfo(output, file_obj.file_size)
+        
+        if parsed_content is None:
+            return await status.edit("❌ **לא נמצאו נתונים עבור קובץ זה.**")
+
+        final_html = f"<h4>📌 File: {file_name}</h4><br><br>{parsed_content}"
+        
+        await status.edit("📤 **יוצר דף...**")
+        link = await create_telegraph_page("MediaInfo Result", final_html, client)
+        
+        await status.edit(
+            f"✅ **MediaInfo נוצר בהצלחה!**\n\n📂 **קובץ:** `{file_name}`\n🔗 **קישור:** [לחץ כאן לצפייה]({link})",
+            disable_web_page_preview=False
+        )
 
     except Exception as e:
-        logging.error(e)
-        await temp_send.edit(f"MediaInfo נעצר בגלל: {str(e)}")
-        return
+        await status.edit(f"❌ שגיאה: `{e}`")
+        
     finally:
-        if await aiopath.exists(des_path):
-            await aioremove(des_path)
+        if os.path.exists(file_path):
+            os.remove(file_path)
 
-    # שליחת קובץ הטקסט עם התוצאות בתגובה להודעה המקורית
-    await message.reply_document(
-        document=txt_filepath, 
-        caption="תוצאות MediaInfo:", 
-        reply_to_message_id=message.id
-    )
-    await temp_send.delete()
 
-    # מחיקת קובץ הטקסט לאחר השליחה
-    await aioremove(txt_filepath)
-
-# Handler לפקודת /mediainfo בקבוצות – ההודעה נשלחת כריפליי
-@bot.on_message(filters.group & filters.command(["mediainfo"]))
-async def mediainfo_group(client, message):
-    rply = message.reply_to_message
-    help_msg = "<b>על מנת להשתמש:</b>\n• שלח קישור או מדיה עם הפקודה /mediainfo בתגובה או בטקסט."
-    if (len(message.command) > 1) or (rply and rply.text):
-        link = None
-        if rply and rply.text and re.search(r"https?://", rply.text):
-            link = rply.text
-        elif len(message.command) > 1:
-            link = message.command[1]
-        if link:
-            return await gen_mediainfo(message, link=link)
-    if rply:
-        file = next(
-            (
-                i
-                for i in [
-                    rply.document,
-                    rply.video,
-                    rply.audio,
-                    rply.voice,
-                    rply.animation,
-                    rply.video_note,
-                ]
-                if i is not None
-            ),
-            None,
-        )
-        if file:
-            return await gen_mediainfo(message, media=file, mmsg=rply)
-    return await message.reply(help_msg, reply_to_message_id=message.id)
-
-# Handler להודעות בפרטי – אם נשלח קישור או מדיה ללא פקודה, התגובה נשלחת כריפליי
-@bot.on_message(filters.private & ~filters.command(["mediainfo", "start"]))
-async def mediainfo_private(client, message):
-    if message.text and re.search(r"https?://", message.text):
-        await gen_mediainfo(message, link=message.text)
-    elif any(
-        getattr(message, attr, None)
-        for attr in ["document", "video", "audio", "voice", "animation", "video_note"]
-    ):
-        media = (
-            message.document
-            or message.video
-            or message.audio
-            or message.voice
-            or message.animation
-            or message.video_note
-        )
-        await gen_mediainfo(message, media=media, mmsg=message)
-    else:
-        await message.reply("אנא שלח קישור או קובץ/וידאו כדי לבצע MediaInfo.", reply_to_message_id=message.id)
-
-# Handler לפקודת /start – הודעת פתיחה מעוצבת, נשלחת כריפליי
-@bot.on_message(filters.command("start"))
-async def start(client, message):
-    start_text = (
-        "**👋 היי!**\n\n"
-        "**אני בוט mediainfo.**\n\n"
-        "📥 **איך משתמשים?**\n"
-        " **פשוט שלח לי קובץ/וידאו שאתב רוצב לקסל עליו פרטים, ואני אחזיר לך פרטים בקובץ `.txt`**\n"
-        "**בקבוצות צריך להגיב על הקובץ/קישור עם הפקודה `/mediainfo`.\n\n"
-        "🤖 נוצר ע\"י: @The_Joker_Bots"
-    )
-    await message.reply(start_text, reply_to_message_id=message.id)
-
-if __name__ == "__main__":
-    bot.run()
