@@ -1,5 +1,6 @@
 pyrogram
 tgcrypto
-aiohttp
+python-dotenv
+telegraph
 aiofiles
-Flask
+dnspython
