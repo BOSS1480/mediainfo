@@ -2,7 +2,10 @@ import os
 import asyncio
 import secrets
 import logging
+import shutil
+import subprocess
 import aiofiles
+from PIL import Image
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from telegraph.aio import Telegraph
@@ -14,6 +17,17 @@ API_HASH = os.environ.get("API_HASH")
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
 logging.basicConfig(level=logging.INFO)
+
+# --- בדיקה והתקנה אוטומטית של MediaInfo ---
+if shutil.which("mediainfo") is None:
+    print("⚠️ Mediainfo לא נמצא! מנסה להתקין אוטומטית...")
+    try:
+        # נסיון להתקנה (דורש הרשאות ב-VPS/Container)
+        subprocess.run("apt-get update && apt-get install -y mediainfo", shell=True, check=True)
+        print("✅ Mediainfo הותקן בהצלחה!")
+    except Exception as e:
+        print(f"❌ שגיאה בהתקנה אוטומטית: {e}")
+        print("חובה להתקין ידנית: sudo apt-get install mediainfo")
 
 app = Client(
     "MediaManagerBot",
@@ -28,36 +42,22 @@ if not os.path.exists(THUMB_DIR):
 
 CHUNK_LIMIT = 20 * 1024 * 1024
 
-MSG_START = (
-    "👋 **שלום! אני בוט לניהול מדיה.**\n\n"
-    "אני יכול לעזור לך:\n"
-    "🔹 לחלץ מידע טכני (MediaInfo) במהירות.\n"
-    "🔹 לנהל תמונות ממוזערות (Thumbnails).\n"
-    "🔹 להחליף תמונות לוידאו ללא הורדה מחדש.\n\n"
-    "לחץ על הכפתור למטה לעזרה ותפריטים 👇"
-)
-
-MSG_HELP_MAIN = "📚 **מרכז העזרה**\n\nבחר את הנושא שמעניין אותך:"
-
-MSG_HELP_MEDIAINFO = (
-    "📝 **עזרה: MediaInfo**\n\n"
-    "כדי לקבל מידע טכני על קובץ:\n"
-    "1. שלח לי את הקובץ (וידאו/אודיו).\n"
-    "2. הגב עליו עם הפקודה `/mediainfo`.\n"
-    "3. אני אוריד רק את ההתחלה (20MB) ואפיק דוח מלא."
-)
-
-MSG_HELP_THUMB = (
-    "🖼 **עזרה: תמונה ממוזערת**\n\n"
-    "כדי להגדיר תמונה קבועה:\n"
-    "1. שלח לי תמונה רגילה.\n"
-    "2. אני אשמור אותה אוטומטית.\n\n"
-    "מעכשיו, כל וידאו שתשלח לי - יוחזר אליך מיד עם התמונה החדשה!\n\n"
-    "🗑 מחיקת תמונה: `/del_thumb`\n"
-    "👀 צפייה בתמונה: `/view_thumb`"
-)
+MSG_START = "👋 **בוט ניהול מדיה (Pyrofork)**\n\nבחר אפשרות לניהול:"
+MSG_HELP_MAIN = "📚 **תפריט ראשי**"
 
 section_dict = {"General": "🗒", "Video": "🎞", "Audio": "🔊", "Text": "🔠", "Menu": "🗃"}
+
+def resize_thumbnail(path):
+    """חובה לכווץ תמונות ל-320px כדי שטלגרם יקבל אותן כ-Thumb"""
+    try:
+        img = Image.open(path)
+        img.thumbnail((320, 320))
+        img = img.convert("RGB")
+        img.save(path, "JPEG", quality=85)
+        return True
+    except Exception as e:
+        print(f"Error resizing: {e}")
+        return False
 
 def parseinfo(out, size):
     tc = ""
@@ -68,7 +68,6 @@ def parseinfo(out, size):
         size_line = f"File size : {size / (1024 * 1024 * 1024):.2f} GiB"
 
     lines = out.split("\n")
-    
     for line in lines:
         line = line.strip()
         if not line: continue
@@ -83,11 +82,8 @@ def parseinfo(out, size):
                 found_section = True
                 break
         
-        if found_section:
-            continue
-
-        if line.startswith("File size"):
-            line = size_line
+        if found_section: continue
+        if line.startswith("File size"): line = size_line
         
         if trigger:
             tc += "<br><pre>"
@@ -101,57 +97,31 @@ def parseinfo(out, size):
 @app.on_message(filters.command("start"))
 async def start_command(client, message):
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("עזרה ותפריטים 📚", callback_data="help_main")]
+        [
+            InlineKeyboardButton("מדיה אינפו 📝", callback_data="help_mediainfo"),
+            InlineKeyboardButton("תמונה ממוזערת 🖼", callback_data="help_thumb")
+        ]
     ])
     await message.reply_text(MSG_START, reply_markup=keyboard, quote=True)
 
 @app.on_callback_query()
 async def callback_handler(client, callback: CallbackQuery):
-    data = callback.data
-    
-    if data == "help_main":
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("מדיה אינפו 📝", callback_data="help_mediainfo"),
-                InlineKeyboardButton("תמונה ממוזערת 🖼", callback_data="help_thumb")
-            ],
-            [InlineKeyboardButton("חזרה לתפריט ראשי 🔙", callback_data="start_menu")]
-        ])
-        await callback.message.edit_text(MSG_HELP_MAIN, reply_markup=keyboard)
-
-    elif data == "help_mediainfo":
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("חזרה 🔙", callback_data="help_main")]
-        ])
-        await callback.message.edit_text(MSG_HELP_MEDIAINFO, reply_markup=keyboard)
-
-    elif data == "help_thumb":
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("חזרה 🔙", callback_data="help_main")]
-        ])
-        await callback.message.edit_text(MSG_HELP_THUMB, reply_markup=keyboard)
-
-    elif data == "start_menu":
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("עזרה ותפריטים 📚", callback_data="help_main")]
-        ])
-        await callback.message.edit_text(MSG_START, reply_markup=keyboard)
+    if callback.data == "help_mediainfo":
+        await callback.answer("שלח קובץ והגב עליו /mediainfo", show_alert=True)
+    elif callback.data == "help_thumb":
+        await callback.answer("שלח תמונה רגילה כדי לשמור אותה", show_alert=True)
 
 @app.on_message(filters.photo & filters.private)
 async def save_thumbnail(client, message):
     user_id = message.from_user.id
     path = os.path.join(THUMB_DIR, f"{user_id}.jpg")
+    msg = await message.reply("⚙️ מעבד תמונה...", quote=True)
+    
     await message.download(file_name=path)
-    await message.reply_text("✅ **התמונה נשמרה!**", quote=True)
-
-@app.on_message(filters.command("view_thumb"))
-async def view_thumbnail(client, message):
-    user_id = message.from_user.id
-    path = os.path.join(THUMB_DIR, f"{user_id}.jpg")
-    if os.path.exists(path):
-        await message.reply_photo(path, caption="🖼 **זו התמונה הממוזערת שלך.**")
+    if resize_thumbnail(path):
+        await msg.edit("✅ **התמונה נשמרה!**\nעכשיו שלח וידאו והוא יקבל את התמונה הזו.")
     else:
-        await message.reply_text("❌ אין לך תמונה שמורה.", quote=True)
+        await msg.edit("❌ שגיאה בעיבוד התמונה.")
 
 @app.on_message(filters.command("del_thumb"))
 async def delete_thumbnail(client, message):
@@ -159,21 +129,23 @@ async def delete_thumbnail(client, message):
     path = os.path.join(THUMB_DIR, f"{user_id}.jpg")
     if os.path.exists(path):
         os.remove(path)
-        await message.reply_text("🗑 **התמונה נמחקה.**", quote=True)
+        await message.reply_text("🗑 התמונה נמחקה.")
     else:
-        await message.reply_text("❌ אין תמונה למחוק.", quote=True)
+        await message.reply_text("❌ אין תמונה למחוק.")
 
 @app.on_message(filters.video | filters.document)
 async def video_handler(client, message):
+    # טיפול במדיה אינפו אם כתוב בקאפשן
     if message.caption and message.caption.startswith("/mediainfo"):
         await process_mediainfo(client, message)
         return
 
+    # החלפת תמונה
     user_id = message.from_user.id
     thumb_path = os.path.join(THUMB_DIR, f"{user_id}.jpg")
 
     if os.path.exists(thumb_path):
-        msg = await message.reply("⚡ **מעבד תמונה...**", quote=True)
+        msg = await message.reply("⚡ **מחליף תמונה...**", quote=True)
         try:
             file_ref = message.video.file_id if message.video else message.document.file_id
             
@@ -188,25 +160,17 @@ async def video_handler(client, message):
             await msg.delete()
         except Exception as e:
             await msg.edit(f"❌ שגיאה: {e}")
-    else:
-        pass
 
 @app.on_message(filters.command("mediainfo"))
-async def mediainfo_command_handler(client, message):
+async def mediainfo_reply_handler(client, message):
     if message.reply_to_message:
         target = message.reply_to_message
         if target.video or target.document or target.audio:
             await process_mediainfo(client, target)
         else:
-            await message.reply("❌ הגב על קובץ מדיה.", quote=True)
+            await message.reply("❌ הגב על קובץ מדיה.")
     else:
-        await message.reply("❌ יש להגיב על קובץ או לשלוח קובץ עם כיתוב `/mediainfo`.", quote=True)
-
-async def create_telegraph_page(title, content):
-    telegraph = Telegraph()
-    await telegraph.create_account(short_name="MediaBot")
-    response = await telegraph.create_page(title=title, html_content=content)
-    return response['url']
+        await message.reply("❌ הגב על קובץ.")
 
 async def process_mediainfo(client, message):
     status = await message.reply("⏳ **מוריד מטא-דאטה...**", quote=True)
@@ -223,6 +187,7 @@ async def process_mediainfo(client, message):
                 if current_size >= CHUNK_LIMIT:
                     break
         
+        # הרצת פקודת mediainfo
         proc = await asyncio.create_subprocess_shell(
             f'mediainfo "{file_path}"',
             stdout=asyncio.subprocess.PIPE,
@@ -232,24 +197,27 @@ async def process_mediainfo(client, message):
         output = stdout.decode().strip()
         
         if output:
-            file_size = getattr(file_obj, "file_size", 0)
             file_name = getattr(file_obj, "file_name", "Unknown File")
-            parsed_content = parseinfo(output, file_size)
+            file_size = getattr(file_obj, "file_size", 0)
             
-            if len(parsed_content) < 50:
-                 parsed_content = f"<pre>{output}</pre>"
+            parsed_content = parseinfo(output, file_size)
+            if len(parsed_content) < 20: 
+                parsed_content = f"<pre>{output}</pre>"
 
             final_html = f"<h4>📌 File: {file_name}</h4><br>{parsed_content}"
-            link = await create_telegraph_page("MediaInfo Result", final_html)
+            
+            telegraph = Telegraph()
+            await telegraph.create_account(short_name="MediaBot")
+            response = await telegraph.create_page(title="MediaInfo", html_content=final_html)
             
             await status.edit(
                 f"✅ **MediaInfo מוכן!**\n"
                 f"📂 קובץ: `{file_name}`\n"
-                f"🔗 [לחץ כאן לצפייה בנתונים]({link})",
+                f"🔗 [לחץ כאן לצפייה בנתונים]({response['url']})",
                 disable_web_page_preview=False
             )
         else:
-            await status.edit("❌ לא הצלחתי לקרוא מידע (Mediainfo החזיר פלט ריק).")
+            await status.edit("❌ שגיאה: Mediainfo החזיר פלט ריק.")
 
     except Exception as e:
         await status.edit(f"❌ שגיאה: {e}")
@@ -258,6 +226,7 @@ async def process_mediainfo(client, message):
             os.remove(file_path)
 
 if __name__ == "__main__":
+    print("Bot Started (Pyrofork Edition)...")
     app.run()
 
 
