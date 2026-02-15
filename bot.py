@@ -134,7 +134,7 @@ async def mediainfo_handler(client, message):
             return await message.reply("❌ לא זוהה קובץ מדיה תקין.", quote=True)
         return
 
-    status = await message.reply("⏳ **מוריד נתונים (20MB ראשונים)...**", quote=True)
+    status = await message.reply("⏳ **מעבד...**", quote=True)
     
     file_path = f"mi_{target_msg.id}_{secrets.token_hex(2)}.dat"
     
