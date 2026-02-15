@@ -1,7 +1,8 @@
-pyrogram
+pyrofork
 tgcrypto
 python-dotenv
 telegraph
 aiofiles
 dnspython
 httpx
+Pillow
