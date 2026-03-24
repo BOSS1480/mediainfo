@@ -146,7 +146,7 @@ async def mediainfo_handler(client, message):
                     break
 
         proc = await asyncio.create_subprocess_shell(
-            f'./mediainfo "{file_path}"',
+            f'mediainfo "{file_path}"',
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
