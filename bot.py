@@ -131,6 +131,7 @@ async def mediainfo_handler(client, message):
             return await message.reply("❌ לא זוהה קובץ מדיה תקין.", quote=True)
         return
 
+    # עריכה 1: הודעת סטטוס התחלתית
     status = await message.reply("⏳ **בודק metadata...**", quote=True)
     
     file_path = f"mi_{target_msg.id}_{secrets.token_hex(2)}.dat"
@@ -143,8 +144,6 @@ async def mediainfo_handler(client, message):
                 current_size += len(chunk)
                 if current_size >= CHUNK_LIMIT:
                     break
-
-        await status.edit("⚙️ **מנתח מידע...**")
 
         proc = await asyncio.create_subprocess_shell(
             f'mediainfo "{file_path}"',
@@ -165,12 +164,11 @@ async def mediainfo_handler(client, message):
 
         final_html = f"<h4>📌 File: {file_name}</h4><br><br>{parsed_content}"
         
-        await status.edit("📤 **יוצר דף...**")
-        
         link = await create_telegraph_page("MediaInfo Result", final_html)
         
+        # עריכה 2: עדכון סופי לקישור
         await status.edit(
-            f"✅ **MediaInfo נוצר בהצלחה!**\n\n📂 **קובץ:** `{file_name}`\n🔗 **קישור:** [לחץ כאן לצפייה]({link})",
+            f"{link}",
             disable_web_page_preview=False
         )
 
@@ -184,5 +182,3 @@ async def mediainfo_handler(client, message):
 if __name__ == "__main__":
     print("🤖 הבוט מתחיל לרוץ...")
     app.run()
-
-
