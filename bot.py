@@ -131,7 +131,6 @@ async def mediainfo_handler(client, message):
             return await message.reply("❌ לא זוהה קובץ מדיה תקין.", quote=True)
         return
 
-    # עריכה 1: הודעת סטטוס התחלתית
     status = await message.reply("⏳ **בודק metadata...**", quote=True)
     
     file_path = f"mi_{target_msg.id}_{secrets.token_hex(2)}.dat"
@@ -166,7 +165,6 @@ async def mediainfo_handler(client, message):
         
         link = await create_telegraph_page("MediaInfo Result", final_html)
         
-        # עריכה 2: עדכון סופי לקישור
         await status.edit(
             f"{link}",
             disable_web_page_preview=False
