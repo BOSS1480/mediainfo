@@ -5,4 +5,4 @@ telegraph
 aiofiles
 Pillow
 httpx
-static-ffmpeg
+pymediainfo
